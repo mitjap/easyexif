@@ -1,3 +1,4 @@
+#include <stdio.h>
 /**************************************************************************
   exif.cpp  -- A simple ISO C++ library to parse basic EXIF 
                information from a JPEG file.
@@ -5,6 +6,8 @@
   Copyright (c) 2010-2013 Mayank Lahiri
   mlahiri@gmail.com
   All rights reserved (BSD License).
+
+  See exif.h for version history.
 
   Redistribution and use in source and binary forms, with or without 
   modification, are permitted provided that the following conditions are met:
@@ -69,10 +72,10 @@ namespace {
   }
 
   string parseEXIFString(const unsigned char *buf, 
-                                unsigned num_components, 
-                                unsigned data, 
-                                unsigned base, 
-                                unsigned len) {
+                         const unsigned num_components, 
+                         const unsigned data, 
+                         const unsigned base, 
+                         const unsigned len) {
     string value;
     if (num_components <= 4)
       value.assign( (const char*)&data, num_components );
@@ -95,10 +98,10 @@ namespace {
   }
 
   IFEntry parseIFEntry(const unsigned char *buf, 
-                              unsigned offs, 
-                              bool alignIntel, 
-                              unsigned base, 
-                              unsigned len) {
+                       const unsigned offs, 
+                       const bool alignIntel, 
+                       const unsigned base, 
+                       const unsigned len) {
     IFEntry result;
 
     // Each directory entry is composed of:
@@ -141,13 +144,17 @@ namespace {
 }
 
 //
-// Main parsing function
+// Locates the EXIF segment and parses it using parseFromEXIFSegment 
 //
 int EXIFInfo::parseFrom(const unsigned char *buf, unsigned len) {
-  bool alignIntel = true;     // byte alignment (defined in EXIF header)
-  unsigned offs   = 0;        // current offset into buffer
-  if (!buf || len == 0)
+  // Sanity check: all JPEG files start with 0xFFD8 and end with 0xFFD9
+  // This check also ensures that the user has supplied a correct value for len.
+  if (!buf || len < 4)
     return PARSE_EXIF_ERROR_NO_EXIF;
+  if (buf[0] != 0xFF || buf[1] != 0xD8)
+    return PARSE_EXIF_ERROR_NO_JPEG;
+  if (buf[len-2] != 0xFF || buf[len-1] != 0xD9)
+    return PARSE_EXIF_ERROR_NO_JPEG;
   clear();
 
   // Scan for EXIF header (bytes 0xFF 0xE1) and do a sanity check by 
@@ -162,6 +169,7 @@ int EXIFInfo::parseFrom(const unsigned char *buf, unsigned len) {
   //   4 bytes: Offset to first IFD
   // =========
   //  16 bytes
+  unsigned offs = 0;        // current offset into buffer
   for (offs = 0; offs < len-1; offs++) 
     if (buf[offs] == 0xFF && buf[offs+1] == 0xE1) 
       break;
@@ -172,7 +180,27 @@ int EXIFInfo::parseFrom(const unsigned char *buf, unsigned len) {
   if (offs + section_length > len || section_length < 16)
     return PARSE_EXIF_ERROR_CORRUPT;
   offs += 2;
-  if (!std::equal(buf+offs, buf+offs+6, "Exif\0\0"))
+
+  return parseFromEXIFSegment(buf + offs, len - offs);
+}
+
+int EXIFInfo::parseFrom(const string &data) {
+  return parseFrom((const unsigned char *)data.data(), data.length());
+}
+
+//
+// Main parsing function for an EXIF segment.
+//
+// PARAM: 'buf' start of the EXIF TIFF, which must be the bytes "Exif\0\0".
+// PARAM: 'len' length of buffer
+//
+int EXIFInfo::parseFromEXIFSegment(const unsigned char *buf, unsigned len) {
+  bool alignIntel = true;     // byte alignment (defined in EXIF header)
+  unsigned offs   = 0;        // current offset into buffer
+  if (!buf || len < 6)
+    return PARSE_EXIF_ERROR_NO_EXIF;
+
+  if (!std::equal(buf, buf+6, "Exif\0\0"))
     return PARSE_EXIF_ERROR_NO_EXIF;
   offs += 6;
   
@@ -180,8 +208,15 @@ int EXIFInfo::parseFrom(const unsigned char *buf, unsigned len) {
   // "MM" for Intel or Motorola byte alignment. Sanity check by parsing
   // the unsigned short that follows, making sure it equals 0x2a. The
   // last 4 bytes are an offset into the first IFD, which are added to 
-  // the global offset counter. No need for bounds checking here because
-  // we checked in the previous section.
+  // the global offset counter. For this block, we expect the following
+  // minimum size:
+  //  2 bytes: 'II' or 'MM'
+  //  2 bytes: 0x002a
+  //  4 bytes: offset to first IDF
+  // -----------------------------
+  //  8 bytes
+  if (offs + 8 > len)
+    return PARSE_EXIF_ERROR_CORRUPT;
   unsigned tiff_header_start = offs;
   if (buf[offs] == 'I' && buf[offs+1] == 'I')
     alignIntel = true;
@@ -213,10 +248,11 @@ int EXIFInfo::parseFrom(const unsigned char *buf, unsigned len) {
   if (offs + 6 + 12 * num_entries > len)
     return PARSE_EXIF_ERROR_CORRUPT;
   offs += 2;
-  unsigned exif_sub_ifd_offset = 0;
-  unsigned gps_sub_ifd_offset  = 0;
+  unsigned exif_sub_ifd_offset = len;
+  unsigned gps_sub_ifd_offset  = len;
   while (--num_entries >= 0) {
     IFEntry result = parseIFEntry(buf, offs, alignIntel, tiff_header_start, len);
+    offs += 12;
     switch(result.tag) {
       case 0x102:
         // Bits per sample
@@ -276,7 +312,6 @@ int EXIFInfo::parseFrom(const unsigned char *buf, unsigned len) {
         exif_sub_ifd_offset = tiff_header_start + result.data;
         break;
     }
-    offs += 12;
   }
 
   // Jump to the EXIF SubIFD if it exists and parse all the information
@@ -419,7 +454,7 @@ int EXIFInfo::parseFrom(const unsigned char *buf, unsigned len) {
             this->GeoLocation.LatComponents.minutes = 
               parseEXIFRational(buf + data + tiff_header_start + 8, alignIntel);
             this->GeoLocation.LatComponents.seconds = 
-              parseEXIFRational(buf + data + tiff_header_start + 12, alignIntel);
+              parseEXIFRational(buf + data + tiff_header_start + 16, alignIntel);
             this->GeoLocation.Latitude = 
               this->GeoLocation.LatComponents.degrees +
               this->GeoLocation.LatComponents.minutes / 60 +
@@ -444,7 +479,7 @@ int EXIFInfo::parseFrom(const unsigned char *buf, unsigned len) {
             this->GeoLocation.LonComponents.minutes = 
               parseEXIFRational(buf + data + tiff_header_start + 8, alignIntel);
             this->GeoLocation.LonComponents.seconds = 
-              parseEXIFRational(buf + data + tiff_header_start + 12, alignIntel);
+              parseEXIFRational(buf + data + tiff_header_start + 16, alignIntel);
             this->GeoLocation.Longitude = 
               this->GeoLocation.LonComponents.degrees +
               this->GeoLocation.LonComponents.minutes / 60 +
@@ -474,11 +509,8 @@ int EXIFInfo::parseFrom(const unsigned char *buf, unsigned len) {
       offs += 12;
     }
   }
-  return 0;
-}
 
-int EXIFInfo::parseFrom(const string &data) {
-  return parseFrom((const unsigned char *)data.c_str(), data.length());
+  return PARSE_EXIF_SUCCESS;
 }
 
 void EXIFInfo::clear() {
@@ -488,25 +520,40 @@ void EXIFInfo::clear() {
   Model             = "";
   Software          = "";
   DateTime          = "";
-  SubSecTimeOriginal= "";
-  Copyright         = "";
   DateTimeOriginal  = "";
   DateTimeDigitized = ""; 
+  SubSecTimeOriginal= "";
+  Copyright         = "";
 
-  // Shorts
-  Orientation       = 0; 
+  // Shorts / unsigned / double
   ByteAlign         = 0;
-  ISOSpeedRatings   = 0;
-  ImageWidth        = 0;
-  ImageHeight       = 0;
-  Flash             = 0;
-  BitsPerSample     = 0;
+  Orientation       = 0; 
 
-  // Unsigned
+  BitsPerSample     = 0;
   ExposureTime      = 0;
   FNumber           = 0;
+  ISOSpeedRatings   = 0;
   ShutterSpeedValue = 0;
   ExposureBiasValue = 0;
   SubjectDistance   = 0;
   FocalLength       = 0;
+  FocalLengthIn35mm = 0;
+  Flash             = 0;
+  MeteringMode      = 0;
+  ImageWidth        = 0;
+  ImageHeight       = 0;
+
+  // Geolocation
+  GeoLocation.Latitude    = 0;
+  GeoLocation.Longitude   = 0;
+  GeoLocation.Altitude    = 0;
+  GeoLocation.AltitudeRef = 0;
+  GeoLocation.LatComponents.degrees   = 0;
+  GeoLocation.LatComponents.minutes   = 0;
+  GeoLocation.LatComponents.seconds   = 0;
+  GeoLocation.LatComponents.direction = 0;
+  GeoLocation.LonComponents.degrees   = 0;
+  GeoLocation.LonComponents.minutes   = 0;
+  GeoLocation.LonComponents.seconds   = 0;
+  GeoLocation.LonComponents.direction = 0;
 }

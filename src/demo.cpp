@@ -56,8 +56,18 @@ int main(int argc, char *argv[]) {
   printf("Metering mode     : %d\n", result.MeteringMode);
   printf("Lens focal length : %f mm\n", result.FocalLength);
   printf("35mm focal length : %u mm\n", result.FocalLengthIn35mm);
-  printf("GPS Latitude      : %f deg\n", result.GeoLocation.Latitude);
-  printf("GPS Longitude     : %f deg\n", result.GeoLocation.Longitude);
+  printf("GPS Latitude      : %f deg (%f deg, %f min, %f sec %c)\n", 
+          result.GeoLocation.Latitude,
+          result.GeoLocation.LatComponents.degrees,
+          result.GeoLocation.LatComponents.minutes,
+          result.GeoLocation.LatComponents.seconds,
+          result.GeoLocation.LatComponents.direction);
+  printf("GPS Longitude     : %f deg (%f deg, %f min, %f sec %c)\n", 
+          result.GeoLocation.Longitude,
+          result.GeoLocation.LonComponents.degrees,
+          result.GeoLocation.LonComponents.minutes,
+          result.GeoLocation.LonComponents.seconds,
+          result.GeoLocation.LonComponents.direction);
   printf("GPS Altitude      : %f m\n", result.GeoLocation.Altitude);
 
   return 0;
